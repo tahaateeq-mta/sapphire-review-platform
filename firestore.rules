@@ -1,0 +1,180 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function userExists(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function currentUserData() {
+      return userDoc(request.auth.uid).data;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && userExists(request.auth.uid)
+        && currentUserData().role == "ADMIN"
+        && currentUserData().status == "ACTIVE";
+    }
+
+    function isMerchant() {
+      return signedIn()
+        && userExists(request.auth.uid)
+        && currentUserData().role == "MERCHANT"
+        && currentUserData().status == "ACTIVE";
+    }
+
+    function isCustomer() {
+      return signedIn()
+        && userExists(request.auth.uid)
+        && currentUserData().role == "CUSTOMER"
+        && currentUserData().status == "ACTIVE";
+    }
+
+    function userMerchantId() {
+      return currentUserData().merchantId;
+    }
+
+    function validProductStatus(status) {
+      return status in ["ACTIVE", "DRAFT", "DISABLED"];
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+
+      allow create: if signedIn() && request.auth.uid == uid;
+
+      allow update: if signedIn() && (
+        isAdmin()
+        || (
+          request.auth.uid == uid
+          && !("role" in request.resource.data.diff(resource.data).changedKeys())
+          && !("merchantId" in request.resource.data.diff(resource.data).changedKeys())
+          && !("status" in request.resource.data.diff(resource.data).changedKeys())
+        )
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /merchants/{merchantId} {
+      allow read: if true;
+
+      allow create, update, delete: if isAdmin();
+    }
+
+// PRODUCTS
+match /products/{productId} {
+  allow read: if true;
+
+  allow create: if isAdmin()
+    || (
+      isMerchant()
+      && request.resource.data.merchantId == userMerchantId()
+      && request.resource.data.merchantUid == request.auth.uid
+      && validProductStatus(request.resource.data.status)
+    );
+
+  allow update: if isAdmin()
+    || (
+      isMerchant()
+      && resource.data.merchantId == userMerchantId()
+      && request.resource.data.merchantId == resource.data.merchantId
+      && request.resource.data.merchantUid == resource.data.merchantUid
+      && validProductStatus(request.resource.data.status)
+    );
+
+  allow delete: if isAdmin();
+}
+
+// ORDERS
+match /orders/{orderId} {
+  allow read: if signedIn();
+
+  allow create: if signedIn()
+    && request.resource.data.userId == request.auth.uid;
+
+  // FYP demo allowance:
+  // Customer/merchant delivery updates are client-side in this prototype.
+  allow update: if signedIn();
+
+  allow delete: if isAdmin();
+}
+
+// POP TOKENS
+match /popTokens/{tokenId} {
+  allow read: if signedIn();
+
+  // FYP demo allowance:
+  // In production, PoP token creation/consumption should be backend-only.
+  allow create, update: if signedIn();
+
+  allow delete: if isAdmin();
+}
+
+// REVIEWS
+match /reviews/{reviewId} {
+  allow read: if true;
+
+  allow create: if signedIn()
+    && request.resource.data.userId == request.auth.uid;
+
+  allow update: if signedIn();
+
+  allow delete: if isAdmin();
+}
+
+    match /reviewVersions/{versionId} {
+      allow read: if true;
+
+      allow create: if isCustomer();
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /merchantReplies/{replyId} {
+      allow read: if true;
+
+      allow create: if isMerchant()
+        && request.resource.data.merchantId == userMerchantId();
+
+      allow update, delete: if isAdmin();
+    }
+
+    match /disputes/{disputeId} {
+      allow read: if isAdmin()
+        || signedIn();
+
+      allow create: if isMerchant()
+        && request.resource.data.merchantId == userMerchantId();
+
+      allow update: if isAdmin()
+        || (
+          isMerchant()
+          && resource.data.merchantId == userMerchantId()
+        );
+
+      allow delete: if isAdmin();
+    }
+
+        match /auditEvents/{eventId} {
+      allow read: if true;
+
+      // FYP prototype note:
+      // In production, audit event creation/anchoring should happen through
+      // trusted backend API routes or Cloud Functions.
+      allow create, update: if signedIn();
+
+      allow delete: if isAdmin();
+    }
+  }
+}
