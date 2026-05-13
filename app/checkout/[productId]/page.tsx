@@ -1,21 +1,28 @@
 "use client";
-import React, { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import { useAuth } from '@/components/providers/AuthProvider';
-import { getProduct } from '@/lib/firebase/services/productService';
-import { createOrder } from '@/lib/firebase/services/orderService';
-import { Product, UserProfile } from '@/lib/types';
-import PageTransition from '@/components/animations/PageTransition';
-import { Loader2, CreditCard, Package, ShieldCheck } from 'lucide-react';
+
+import React, { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  CreditCard,
+  Loader2,
+  Package,
+  ShieldCheck,
+} from "lucide-react";
+
+import PageTransition from "@/components/animations/PageTransition";
+import { useAuth } from "@/components/providers/AuthProvider";
+import { getProduct } from "@/lib/firebase/services/productService";
+import { createOrder } from "@/lib/firebase/services/orderService";
+import type { Product, UserProfile } from "@/lib/types";
 
 export default function CheckoutPage() {
   const params = useParams();
   const router = useRouter();
-  
-  // Properly cast Auth context to include UserProfile[cite: 1]
-  const { currentUser: user, userProfile } = useAuth() as { 
-    currentUser: any; 
-    userProfile: UserProfile | null 
+
+  const { currentUser: user, userProfile } = useAuth() as {
+    currentUser: { uid: string; email?: string | null } | null;
+    userProfile: UserProfile | null;
   };
 
   const [product, setProduct] = useState<Product | null>(null);
@@ -23,40 +30,83 @@ export default function CheckoutPage() {
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const productId =
+    typeof params?.productId === "string" ? params.productId : "";
+
   useEffect(() => {
+    let isMounted = true;
+
     async function loadProduct() {
-      const productId = params?.productId as string;
-      if (!productId) return;
-      
+      if (!productId) {
+        setError("Product ID is missing.");
+        setLoading(false);
+        return;
+      }
+
       try {
+        setLoading(true);
+        setError(null);
+
         const data = await getProduct(productId);
+
+        if (!isMounted) return;
+
         if (!data) {
           setError("Product record not found.");
-        } else if (data.status !== 'ACTIVE') {
-          setError("This item is currently unavailable for purchase.");
-        } else {
-          setProduct(data);
+          setProduct(null);
+          return;
         }
+
+        if (data.status !== "ACTIVE") {
+          setError("This item is currently unavailable for purchase.");
+          setProduct(null);
+          return;
+        }
+
+        if ((data.stock ?? 0) <= 0) {
+          setError("This item is currently out of stock.");
+          setProduct(null);
+          return;
+        }
+
+        setProduct(data);
       } catch (err) {
+        console.error("Error loading checkout product:", err);
+
+        if (!isMounted) return;
+
         setError("Network error: Failed to sync product details.");
+        setProduct(null);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     }
+
     loadProduct();
-  }, [params?.productId]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [productId]);
 
   const handlePlaceOrder = async () => {
-    if (!user || !product) return;
+    if (!user) {
+      router.push("/login");
+      return;
+    }
+
+    if (!product || processing) return;
+
     setProcessing(true);
     setError(null);
 
     try {
-      // Updated CreateOrderInput matches the repaired service[cite: 4]
       await createOrder({
         userId: user.uid,
-        customerName: userProfile?.name || 'Guest User',
-        customerEmail: userProfile?.email || user.email,
+        customerName: userProfile?.name || "Guest User",
+        customerEmail: userProfile?.email || user.email || "",
         merchantId: product.merchantId,
         merchantUid: product.merchantUid,
         productId: product.id,
@@ -65,114 +115,174 @@ export default function CheckoutPage() {
         totalPrice: product.price,
       });
 
-      // Redirect to the customer orders page upon success[cite: 11]
-      router.push('/customer/orders');
-    } catch (err: any) {
-      setError(err.message || "Failed to secure transaction. Please try again.");
+      router.push("/customer/orders");
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Failed to secure transaction. Please try again.";
+
+      setError(message);
       setProcessing(false);
     }
   };
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-white font-mono animate-pulse">
-        <Loader2 className="animate-spin mb-6 text-blue-500" size={48} />
-        <p className="text-slate-400 uppercase tracking-widest text-xs">Finalizing Secure Session...</p>
-      </div>
+      <PageTransition>
+        <div className="flex min-h-[55vh] flex-col items-center justify-center px-4 text-center font-mono text-white">
+          <Loader2 className="mb-6 animate-spin text-blue-500" size={48} />
+
+          <p className="animate-pulse text-xs uppercase tracking-[0.3em] text-slate-400">
+            Finalizing Secure Session...
+          </p>
+        </div>
+      </PageTransition>
     );
   }
 
   if (error || !product) {
     return (
-      <div className="max-w-md mx-auto py-24 text-center px-4">
-        <div className="bg-red-500/10 border border-red-500/20 p-8 rounded-3xl shadow-2xl">
-          <h2 className="text-2xl font-black text-red-400 mb-4 uppercase tracking-tight">Access Denied</h2>
-          <p className="text-slate-400 mb-8 font-light">{error || "The requested item is out of sync with the ledger."}</p>
-          <button 
-            onClick={() => router.push('/store')}
-            className="bg-slate-800 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-700 transition-all text-sm"
-          >
-            &larr; Return to Market
-          </button>
+      <PageTransition>
+        <div className="mx-auto flex min-h-[55vh] max-w-md items-center justify-center px-4 py-10 text-center">
+          <div className="w-full rounded-3xl border border-red-500/20 bg-red-500/10 p-6 shadow-2xl sm:p-8">
+            <h2 className="mb-4 text-2xl font-black uppercase tracking-tight text-red-400">
+              Access Denied
+            </h2>
+
+            <p className="mb-8 text-sm font-light leading-6 text-slate-400">
+              {error || "The requested item is out of sync with the ledger."}
+            </p>
+
+            <button
+              type="button"
+              onClick={() => router.push("/store")}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-800 px-6 py-3 text-sm font-bold text-white transition-all hover:bg-slate-700 sm:w-auto"
+            >
+              <ArrowLeft size={16} />
+              Return to Market
+            </button>
+          </div>
         </div>
-      </div>
+      </PageTransition>
     );
   }
 
-  // Safe fallback for images[cite: 1]
   const imageSrc = product.imageUrl || product.image || "";
+  const price = product.price || 0;
 
   return (
     <PageTransition>
-      <div className="max-w-5xl mx-auto px-6 py-10">
-        <div className="flex items-center justify-between mb-12">
-          <h1 className="text-4xl font-black text-white tracking-tighter uppercase flex items-center gap-4">
-            <CreditCard className="text-blue-500" size={32} /> Secure Checkout
+      <div className="mx-auto w-full max-w-5xl overflow-x-hidden py-6 sm:py-10">
+        <div className="mb-8 flex flex-col gap-4 sm:mb-12 md:flex-row md:items-center md:justify-between">
+          <h1 className="flex min-w-0 items-center gap-3 text-3xl font-black uppercase tracking-tight text-white sm:text-4xl">
+            <CreditCard className="shrink-0 text-blue-500" size={30} />
+            <span className="break-words">Secure Checkout</span>
           </h1>
-          <div className="h-px bg-white/10 flex-grow ml-8 hidden md:block"></div>
+
+          <div className="hidden h-px flex-grow bg-white/10 md:block" />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-          {/* Order Manifest */}
-          <div className="lg:col-span-2 space-y-8">
-            <div className="glass-panel p-8 rounded-3xl border border-white/5 shadow-xl">
-              <h2 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                <Package size={16} /> Transaction Manifest
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-3 lg:gap-10 xl:gap-12">
+          <div className="space-y-6 lg:col-span-2 lg:space-y-8">
+            <div className="glass-panel rounded-3xl border border-white/5 p-5 shadow-xl sm:p-8">
+              <h2 className="mb-6 flex items-center gap-2 text-xs font-black uppercase tracking-widest text-slate-500">
+                <Package size={16} />
+                Transaction Manifest
               </h2>
-              <div className="flex flex-col md:flex-row gap-8">
-                <div className="w-32 h-32 bg-black/40 rounded-2xl flex items-center justify-center overflow-hidden border border-white/5 shadow-inner shrink-0">
+
+              <div className="flex flex-col gap-5 sm:flex-row sm:gap-8">
+                <div className="flex h-32 w-full shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/5 bg-black/40 shadow-inner sm:w-32">
                   {imageSrc ? (
-                    <img src={imageSrc} alt={product.name} className="w-full h-full object-cover" />
+                    <img
+                      src={imageSrc}
+                      alt={product.name}
+                      className="h-full w-full object-cover"
+                    />
                   ) : (
                     <Package className="text-slate-700" size={40} />
                   )}
                 </div>
-                <div className="flex flex-col justify-center">
-                  <h3 className="text-2xl font-black text-white uppercase tracking-tight">{product.name}</h3>
-                  <p className="text-slate-500 text-sm font-bold uppercase tracking-wider mt-1">{product.category}</p>
-                  <div className="flex items-center gap-2 mt-4">
-                    <span className="text-blue-400 font-black text-2xl">${(product.price || 0).toFixed(2)}</span>
-                    <span className="text-slate-700 font-mono text-xs">/ UNIT</span>
+
+                <div className="flex min-w-0 flex-col justify-center">
+                  <h3 className="break-words text-2xl font-black uppercase tracking-tight text-white">
+                    {product.name}
+                  </h3>
+
+                  <p className="mt-1 break-words text-sm font-bold uppercase tracking-wider text-slate-500">
+                    {product.category || "Uncategorized"}
+                  </p>
+
+                  <div className="mt-4 flex flex-wrap items-end gap-2">
+                    <span className="text-2xl font-black text-blue-400">
+                      ${price.toFixed(2)}
+                    </span>
+
+                    <span className="pb-1 font-mono text-xs text-slate-700">
+                      / UNIT
+                    </span>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="glass-panel p-8 rounded-3xl border border-white/5 bg-blue-600/[0.02] shadow-xl">
-              <h2 className="text-xs font-black text-green-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                <ShieldCheck size={18} /> Protocol: Proof-of-Purchase
+            <div className="glass-panel rounded-3xl border border-white/5 bg-blue-600/[0.02] p-5 shadow-xl sm:p-8">
+              <h2 className="mb-5 flex items-center gap-2 text-xs font-black uppercase tracking-widest text-green-500 sm:mb-6">
+                <ShieldCheck size={18} />
+                Protocol: Proof-of-Purchase
               </h2>
-              <p className="text-slate-400 text-sm leading-relaxed font-light">
-                Upon transaction finalization, the system will generate a <span className="text-white font-bold">PoP Token</span> uniquely bound to this Order ID and your User ID. This token serves as a cryptographic key, granting exclusive authorization to append a verified review to the immutable audit ledger.
+
+              <p className="text-sm font-light leading-7 text-slate-400">
+                Upon transaction finalization, the system will generate a{" "}
+                <span className="font-bold text-white">PoP Token</span> uniquely
+                bound to this Order ID and your User ID. This token serves as a
+                cryptographic key, granting exclusive authorization to append a
+                verified review to the immutable audit ledger.
               </p>
             </div>
           </div>
 
-          {/* Settlement Sidebar */}
-          <div className="space-y-8">
-            <div className="glass-panel p-8 rounded-3xl border border-white/10 bg-blue-600/[0.05] shadow-2xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-32 h-32 bg-blue-500/10 blur-3xl -mr-16 -mt-16"></div>
-              <h2 className="text-xl font-black text-white mb-8 uppercase tracking-tight">Settlement</h2>
-              
-              <div className="space-y-5 mb-10">
-                <div className="flex justify-between text-slate-500 text-xs font-bold uppercase tracking-widest">
+          <aside className="space-y-6 lg:space-y-8">
+            <div className="glass-panel relative overflow-hidden rounded-3xl border border-white/10 bg-blue-600/[0.05] p-5 shadow-2xl sm:p-8">
+              <div className="absolute right-0 top-0 h-32 w-32 bg-blue-500/10 blur-3xl -mr-16 -mt-16" />
+
+              <h2 className="mb-8 text-xl font-black uppercase tracking-tight text-white">
+                Settlement
+              </h2>
+
+              <div className="mb-8 space-y-5 sm:mb-10">
+                <div className="flex items-center justify-between gap-4 text-xs font-bold uppercase tracking-widest text-slate-500">
                   <span>Subtotal</span>
-                  <span className="text-slate-300">${product.price.toFixed(2)}</span>
+                  <span className="text-slate-300">${price.toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between text-slate-500 text-xs font-bold uppercase tracking-widest">
+
+                <div className="flex items-center justify-between gap-4 text-xs font-bold uppercase tracking-widest text-slate-500">
                   <span>Network Fee</span>
-                  <span className="text-green-500 font-black">0.00</span>
+                  <span className="font-black text-green-500">0.00</span>
                 </div>
-                <div className="border-t border-white/10 pt-6 flex justify-between text-white font-black text-3xl tracking-tighter">
-                  <span className="text-lg text-slate-500 self-center">TOTAL</span>
-                  <span>${product.price.toFixed(2)}</span>
+
+                <div className="flex items-center justify-between gap-4 border-t border-white/10 pt-6 font-black text-white">
+                  <span className="text-sm text-slate-500 sm:text-lg">
+                    TOTAL
+                  </span>
+
+                  <span className="text-2xl tracking-tighter sm:text-3xl">
+                    ${price.toFixed(2)}
+                  </span>
                 </div>
               </div>
 
+              {error && (
+                <div className="mb-5 rounded-2xl border border-red-500/20 bg-red-500/10 p-4 text-sm leading-6 text-red-300">
+                  {error}
+                </div>
+              )}
+
               <button
+                type="button"
                 onClick={handlePlaceOrder}
                 disabled={processing}
-                className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black py-5 rounded-2xl transition-all flex items-center justify-center gap-3 disabled:opacity-50 shadow-xl shadow-blue-900/30 uppercase tracking-widest text-sm"
+                className="flex w-full items-center justify-center gap-3 rounded-2xl bg-blue-600 py-5 text-sm font-black uppercase tracking-widest text-white shadow-xl shadow-blue-900/30 transition-all hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {processing ? (
                   <>
@@ -180,18 +290,19 @@ export default function CheckoutPage() {
                     Securing Ledger...
                   </>
                 ) : (
-                  `Execute Payment`
+                  "Execute Payment"
                 )}
               </button>
-              
-              <div className="flex items-center justify-center gap-2 mt-6">
-                <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest">
+
+              <div className="mt-6 flex items-center justify-center gap-2">
+                <div className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
                   End-to-End Encrypted
                 </p>
               </div>
             </div>
-          </div>
+          </aside>
         </div>
       </div>
     </PageTransition>

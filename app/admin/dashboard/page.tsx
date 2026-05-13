@@ -19,6 +19,21 @@ import {
   where,
 } from "firebase/firestore";
 import { createFirestoreAuditEvent } from "@/lib/firebase/services/auditService";
+import type { UserProfile } from "@/lib/types";
+
+type AuthUser = {
+  uid: string;
+  email?: string | null;
+};
+
+type AuditStats = {
+  total: number;
+  confirmed: number;
+  pending: number;
+  coverage: number;
+};
+
+type DisputeStatus = "OPEN" | "UNDER_REVIEW" | "RESOLVED" | "REJECTED";
 
 type AdminDispute = {
   id: string;
@@ -28,7 +43,7 @@ type AdminDispute = {
   openedBy?: string;
   reason?: string;
   description?: string;
-  status: "OPEN" | "UNDER_REVIEW" | "RESOLVED" | "REJECTED" | string;
+  status: DisputeStatus;
   adminDecision?: string;
   adminNoteHash?: string;
   createdAt?: string;
@@ -36,27 +51,66 @@ type AdminDispute = {
   updatedAt?: string;
 };
 
+type DemoState = ReturnType<typeof getDemoState>;
+
+type DemoAuditEvent = {
+  blockchainStatus?: string;
+};
+
+type DemoDispute = AdminDispute;
+
+type DemoReview = {
+  id: string;
+  orderId: string;
+  status: string;
+};
+
 export default function AdminDashboard() {
-  const { userProfile, currentUser } = useAuth() as any;
+  const { userProfile, currentUser } = useAuth() as {
+    userProfile: UserProfile | null;
+    currentUser: AuthUser | null;
+  };
 
   const [mounted, setMounted] = useState(false);
-
-  const [state, setState] = useState<any>(null);
+  const [state, setState] = useState<DemoState | null>(null);
   const [disputes, setDisputes] = useState<AdminDispute[]>([]);
-  const [auditStats, setAuditStats] = useState({
+  const [auditStats, setAuditStats] = useState<AuditStats>({
     total: 0,
     confirmed: 0,
     pending: 0,
     coverage: 0,
   });
 
-  const [decisionDispute, setDecisionDispute] = useState<AdminDispute | null>(
-    null
-  );
+  const [decisionDispute, setDecisionDispute] =
+    useState<AdminDispute | null>(null);
   const [decisionType, setDecisionType] = useState("");
   const [adminNote, setAdminNote] = useState("");
+  const [actionLoading, setActionLoading] = useState(false);
 
   const isFirebaseMode = process.env.NEXT_PUBLIC_DATA_MODE === "firebase";
+
+  const calculateStats = (events: DemoAuditEvent[]) => {
+    const confirmed = events.filter(
+      (event) =>
+        event.blockchainStatus === "MOCK_CONFIRMED" ||
+        event.blockchainStatus === "CONFIRMED"
+    ).length;
+
+    const pending = events.filter(
+      (event) =>
+        event.blockchainStatus === "PENDING" ||
+        event.blockchainStatus === "NOT_ANCHORED" ||
+        !event.blockchainStatus
+    ).length;
+
+    return {
+      total: events.length,
+      confirmed,
+      pending,
+      coverage:
+        events.length > 0 ? Math.round((confirmed / events.length) * 100) : 0,
+    };
+  };
 
   const loadData = async () => {
     if (isFirebaseMode) {
@@ -82,7 +136,11 @@ export default function AdminDashboard() {
               description: data.description
                 ? String(data.description)
                 : undefined,
-              status: String(data.status || "OPEN"),
+              status: ["OPEN", "UNDER_REVIEW", "RESOLVED", "REJECTED"].includes(
+                String(data.status)
+              )
+              ? (String(data.status) as DisputeStatus)
+              : "OPEN",
               adminDecision: data.adminDecision
                 ? String(data.adminDecision)
                 : undefined,
@@ -104,65 +162,28 @@ export default function AdminDashboard() {
           collection(firestoreDb, "auditEvents")
         );
 
-        const events = eventsSnapshot.docs.map((docSnap) => docSnap.data());
+        const events = eventsSnapshot.docs.map(
+          (docSnap) => docSnap.data() as DemoAuditEvent
+        );
 
-        const confirmed = events.filter(
-          (event: any) =>
-            event.blockchainStatus === "MOCK_CONFIRMED" ||
-            event.blockchainStatus === "CONFIRMED"
-        ).length;
-
-        const pending = events.filter(
-          (event: any) =>
-            event.blockchainStatus === "PENDING" ||
-            event.blockchainStatus === "NOT_ANCHORED" ||
-            !event.blockchainStatus
-        ).length;
-
-        setAuditStats({
-          total: events.length,
-          confirmed,
-          pending,
-          coverage:
-            events.length > 0 ? Math.round((confirmed / events.length) * 100) : 0,
-        });
+        setAuditStats(calculateStats(events));
       } catch (error) {
         console.error("Error loading Firebase data:", error);
       }
-    } else {
-      const demoState = getDemoState();
-      setState(demoState);
 
-      setDisputes(
-        demoState.disputes.filter(
-          (dispute: any) =>
-            dispute.status === "OPEN" || dispute.status === "UNDER_REVIEW"
-        )
-      );
-
-      const events = demoState.auditEvents;
-
-      const confirmed = events.filter(
-        (event: any) =>
-          event.blockchainStatus === "MOCK_CONFIRMED" ||
-          event.blockchainStatus === "CONFIRMED"
-      ).length;
-
-      const pending = events.filter(
-        (event: any) =>
-          event.blockchainStatus === "PENDING" ||
-          event.blockchainStatus === "NOT_ANCHORED" ||
-          !event.blockchainStatus
-      ).length;
-
-      setAuditStats({
-        total: events.length,
-        confirmed,
-        pending,
-        coverage:
-          events.length > 0 ? Math.round((confirmed / events.length) * 100) : 0,
-      });
+      return;
     }
+
+    const demoState = getDemoState();
+    setState(demoState);
+
+    const activeDisputes = demoState.disputes.filter(
+      (dispute: DemoDispute) =>
+        dispute.status === "OPEN" || dispute.status === "UNDER_REVIEW"
+    );
+
+    setDisputes(activeDisputes);
+    setAuditStats(calculateStats(demoState.auditEvents as DemoAuditEvent[]));
   };
 
   useEffect(() => {
@@ -181,41 +202,51 @@ export default function AdminDashboard() {
 
     const timestamp = new Date().toISOString();
 
-    if (isFirebaseMode) {
-      await updateDoc(doc(firestoreDb, "disputes", disputeId), {
-        status: "UNDER_REVIEW",
-        updatedAt: timestamp,
-      });
+    try {
+      setActionLoading(true);
 
-      await updateDoc(doc(firestoreDb, "reviews", reviewId), {
-        status: "UNDER_REVIEW",
-        updatedAt: timestamp,
-      });
-
-      await createFirestoreAuditEvent({
-        eventType: "DISPUTE_UPDATED",
-        reviewId,
-        disputeId,
-        actorId: currentUser?.uid || "admin",
-        actorRole: "ADMIN",
-        actorPublicId: userProfile?.publicId || "admin",
-        details: "Dispute marked UNDER_REVIEW by admin.",
-        payload: {
-          disputeId,
-          reviewId,
+      if (isFirebaseMode) {
+        await updateDoc(doc(firestoreDb, "disputes", disputeId), {
           status: "UNDER_REVIEW",
           updatedAt: timestamp,
-        },
-        anchorMock: true,
-      });
+        });
 
-      alert("Dispute marked as under review.");
-      await loadData();
-    } else {
+        await updateDoc(doc(firestoreDb, "reviews", reviewId), {
+          status: "UNDER_REVIEW",
+          updatedAt: timestamp,
+        });
+
+        await createFirestoreAuditEvent({
+          eventType: "DISPUTE_UPDATED",
+          reviewId,
+          disputeId,
+          actorId: currentUser?.uid || "admin",
+          actorRole: "ADMIN",
+          actorPublicId: userProfile?.publicId || "admin",
+          details: "Dispute marked UNDER_REVIEW by admin.",
+          payload: {
+            disputeId,
+            reviewId,
+            status: "UNDER_REVIEW",
+            updatedAt: timestamp,
+          },
+          anchorMock: true,
+        });
+
+        alert("Dispute marked as under review.");
+        await loadData();
+        return;
+      }
+
+      if (!state) {
+        alert("Demo state not loaded.");
+        return;
+      }
+
       const newState = { ...state };
 
       const disputeIndex = newState.disputes.findIndex(
-        (dispute: any) => dispute.id === disputeId
+        (dispute: DemoDispute) => dispute.id === disputeId
       );
 
       if (disputeIndex === -1) {
@@ -224,7 +255,8 @@ export default function AdminDashboard() {
       }
 
       const reviewIndex = newState.reviews.findIndex(
-        (review: any) => review.id === newState.disputes[disputeIndex].reviewId
+        (review: DemoReview) =>
+          review.id === newState.disputes[disputeIndex].reviewId
       );
 
       if (reviewIndex === -1) {
@@ -258,6 +290,8 @@ export default function AdminDashboard() {
       saveDemoState(newState);
       setState(newState);
       await loadData();
+    } finally {
+      setActionLoading(false);
     }
   };
 
@@ -289,128 +323,139 @@ export default function AdminDashboard() {
 
     const timestamp = new Date().toISOString();
 
-    if (isFirebaseMode) {
-      let newReviewStatus = "ACTIVE";
-      let newDisputeStatus = "RESOLVED";
+    try {
+      setActionLoading(true);
 
-      if (decisionType === "NO_ACTION") {
-        newReviewStatus = "ACTIVE";
-        newDisputeStatus = "RESOLVED";
-      } else if (decisionType === "MARK_RESOLVED") {
-        newReviewStatus = "RESOLVED";
-        newDisputeStatus = "RESOLVED";
-      } else if (decisionType === "STRIKE_REVIEW") {
-        newReviewStatus = "STRICKEN";
-        newDisputeStatus = "RESOLVED";
-      } else if (decisionType === "REJECT_DISPUTE") {
-        newReviewStatus = "ACTIVE";
-        newDisputeStatus = "REJECTED";
-      }
+      if (isFirebaseMode) {
+        let newReviewStatus = "ACTIVE";
+        let newDisputeStatus: DisputeStatus = "RESOLVED";
 
-      const noteHash = await generateHash(adminNote.trim());
+        if (decisionType === "NO_ACTION") {
+          newReviewStatus = "ACTIVE";
+          newDisputeStatus = "RESOLVED";
+        } else if (decisionType === "MARK_RESOLVED") {
+          newReviewStatus = "RESOLVED";
+          newDisputeStatus = "RESOLVED";
+        } else if (decisionType === "STRIKE_REVIEW") {
+          newReviewStatus = "STRICKEN";
+          newDisputeStatus = "RESOLVED";
+        } else if (decisionType === "REJECT_DISPUTE") {
+          newReviewStatus = "ACTIVE";
+          newDisputeStatus = "REJECTED";
+        }
 
-      await updateDoc(doc(firestoreDb, "disputes", disputeId), {
-        status: newDisputeStatus,
-        adminDecision: decisionType,
-        adminNoteHash: noteHash,
-        resolvedAt: timestamp,
-        updatedAt: timestamp,
-      });
+        const noteHash = await generateHash(adminNote.trim());
 
-      await updateDoc(doc(firestoreDb, "reviews", reviewId), {
-        status: newReviewStatus,
-        updatedAt: timestamp,
-      });
-
-      await createFirestoreAuditEvent({
-        eventType: "ADMIN_DECISION",
-        reviewId,
-        disputeId,
-        actorId: currentUser?.uid || "admin",
-        actorRole: "ADMIN",
-        actorPublicId: userProfile?.publicId || "admin",
-        details: `Admin decision: ${decisionType} applied to dispute.`,
-        payload: {
-          disputeId,
-          reviewId,
-          decision: decisionType,
-          newReviewStatus,
-          newDisputeStatus,
+        await updateDoc(doc(firestoreDb, "disputes", disputeId), {
+          status: newDisputeStatus,
+          adminDecision: decisionType,
           adminNoteHash: noteHash,
-          decidedAt: timestamp,
-        },
-        anchorMock: true,
-      });
+          resolvedAt: timestamp,
+          updatedAt: timestamp,
+        });
 
-      alert("Admin decision securely recorded to Firestore.");
-    } else {
-      const newState = { ...state };
+        await updateDoc(doc(firestoreDb, "reviews", reviewId), {
+          status: newReviewStatus,
+          updatedAt: timestamp,
+        });
 
-      const disputeIndex = newState.disputes.findIndex(
-        (dispute: any) => dispute.id === disputeId
-      );
-
-      const reviewIndex = newState.reviews.findIndex(
-        (review: any) => review.id === reviewId
-      );
-
-      if (disputeIndex === -1 || reviewIndex === -1) {
-        alert("Dispute or review not found.");
-        return;
-      }
-
-      let newReviewStatus = newState.reviews[reviewIndex].status;
-      let newDisputeStatus = "RESOLVED";
-
-      if (decisionType === "NO_ACTION") {
-        newReviewStatus = "ACTIVE";
-        newState.disputes[disputeIndex].adminDecision = "NO_ACTION";
-      } else if (decisionType === "MARK_RESOLVED") {
-        newReviewStatus = "RESOLVED";
-        newState.disputes[disputeIndex].adminDecision = "MARK_RESOLVED";
-      } else if (decisionType === "STRIKE_REVIEW") {
-        newReviewStatus = "STRICKEN";
-        newState.disputes[disputeIndex].adminDecision = "STRIKE_REVIEW";
-      } else if (decisionType === "REJECT_DISPUTE") {
-        newReviewStatus = "ACTIVE";
-        newDisputeStatus = "REJECTED";
-        newState.disputes[disputeIndex].adminDecision = "REJECT_DISPUTE";
-      }
-
-      const noteHash = await generateHash(adminNote.trim());
-
-      newState.reviews[reviewIndex].status = newReviewStatus;
-      newState.disputes[disputeIndex].status = newDisputeStatus;
-      newState.disputes[disputeIndex].resolvedAt = timestamp;
-
-      newState.auditEvents.push(
-        createAuditEvent({
+        await createFirestoreAuditEvent({
           eventType: "ADMIN_DECISION",
-          reviewId: newState.reviews[reviewIndex].id,
-          orderId: newState.reviews[reviewIndex].orderId,
-          actorId: userProfile?.uid || "admin",
+          reviewId,
+          disputeId,
+          actorId: currentUser?.uid || "admin",
           actorRole: "ADMIN",
           actorPublicId: userProfile?.publicId || "admin",
+          details: `Admin decision: ${decisionType} applied to dispute.`,
           payload: {
             disputeId,
+            reviewId,
             decision: decisionType,
+            newReviewStatus,
+            newDisputeStatus,
             adminNoteHash: noteHash,
+            decidedAt: timestamp,
           },
-          previousEventHash: getPreviousEventHashForOrder(
-            newState.reviews[reviewIndex].orderId,
-            newState.auditEvents
-          ),
-        })
-      );
+          anchorMock: true,
+        });
 
-      saveDemoState(newState);
-      setState(newState);
+        alert("Admin decision securely recorded to Firestore.");
+      } else {
+        if (!state) {
+          alert("Demo state not loaded.");
+          return;
+        }
+
+        const newState = { ...state };
+
+        const disputeIndex = newState.disputes.findIndex(
+          (dispute: DemoDispute) => dispute.id === disputeId
+        );
+
+        const reviewIndex = newState.reviews.findIndex(
+          (review: DemoReview) => review.id === reviewId
+        );
+
+        if (disputeIndex === -1 || reviewIndex === -1) {
+          alert("Dispute or review not found.");
+          return;
+        }
+
+        let newReviewStatus = newState.reviews[reviewIndex].status;
+        let newDisputeStatus: DisputeStatus = "RESOLVED";
+
+        if (decisionType === "NO_ACTION") {
+          newReviewStatus = "ACTIVE";
+          newState.disputes[disputeIndex].adminDecision = "NO_ACTION";
+        } else if (decisionType === "MARK_RESOLVED") {
+          newReviewStatus = "RESOLVED";
+          newState.disputes[disputeIndex].adminDecision = "MARK_RESOLVED";
+        } else if (decisionType === "STRIKE_REVIEW") {
+          newReviewStatus = "STRICKEN";
+          newState.disputes[disputeIndex].adminDecision = "STRIKE_REVIEW";
+        } else if (decisionType === "REJECT_DISPUTE") {
+          newReviewStatus = "ACTIVE";
+          newDisputeStatus = "REJECTED";
+          newState.disputes[disputeIndex].adminDecision = "REJECT_DISPUTE";
+        }
+
+        const noteHash = await generateHash(adminNote.trim());
+
+        newState.reviews[reviewIndex].status = newReviewStatus;
+        newState.disputes[disputeIndex].status = newDisputeStatus;
+        newState.disputes[disputeIndex].resolvedAt = timestamp;
+
+        newState.auditEvents.push(
+          createAuditEvent({
+            eventType: "ADMIN_DECISION",
+            reviewId: newState.reviews[reviewIndex].id,
+            orderId: newState.reviews[reviewIndex].orderId,
+            actorId: userProfile?.uid || "admin",
+            actorRole: "ADMIN",
+            actorPublicId: userProfile?.publicId || "admin",
+            payload: {
+              disputeId,
+              decision: decisionType,
+              adminNoteHash: noteHash,
+            },
+            previousEventHash: getPreviousEventHashForOrder(
+              newState.reviews[reviewIndex].orderId,
+              newState.auditEvents
+            ),
+          })
+        );
+
+        saveDemoState(newState);
+        setState(newState);
+      }
+
+      setDecisionDispute(null);
+      setDecisionType("");
+      setAdminNote("");
+      await loadData();
+    } finally {
+      setActionLoading(false);
     }
-
-    setDecisionDispute(null);
-    setDecisionType("");
-    setAdminNote("");
-    await loadData();
   };
 
   if (!mounted) {
@@ -420,23 +465,23 @@ export default function AdminDashboard() {
   return (
     <RequireRole allowedRoles={["ADMIN"]}>
       <PageTransition>
-        <div className="w-full max-w-6xl mx-auto p-8">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-4">
-            <div>
-              <h1 className="text-4xl font-black text-white tracking-tight mb-2">
+        <div className="mx-auto w-full max-w-6xl overflow-x-hidden px-0 py-4 sm:py-6">
+          <div className="mb-8 flex flex-col justify-between gap-5 md:mb-10 md:flex-row md:items-center">
+            <div className="min-w-0">
+              <h1 className="mb-2 break-words text-3xl font-black tracking-tight text-white sm:text-4xl">
                 Admin Dashboard
               </h1>
 
-              <p className="text-sm text-purple-400 font-mono bg-purple-500/10 inline-block px-3 py-1 rounded-full border border-purple-500/20">
+              <p className="inline-block max-w-full break-all rounded-full border border-purple-500/20 bg-purple-500/10 px-3 py-1 font-mono text-xs leading-5 text-purple-400 sm:break-words sm:text-sm">
                 Logged in as: {userProfile?.name || "Admin"} (
-                {userProfile?.email})
+                {userProfile?.email || "No email"})
               </p>
             </div>
 
-            <div className="flex gap-3">
+            <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
               <SmoothLink
                 href="/admin/merchants"
-                className="bg-blue-600/20 text-blue-400 px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-blue-600/30 transition border border-blue-500/30 flex items-center gap-2"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-blue-500/30 bg-blue-600/20 px-5 py-3 text-sm font-bold text-blue-400 transition hover:bg-blue-600/30 sm:w-auto"
               >
                 <Store size={16} />
                 Manage Merchants
@@ -444,16 +489,16 @@ export default function AdminDashboard() {
 
               <SmoothLink
                 href="/admin/audit-log"
-                className="bg-white/10 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-white/20 transition border border-white/5"
+                className="inline-flex w-full items-center justify-center rounded-xl border border-white/5 bg-white/10 px-5 py-3 text-sm font-medium text-white transition hover:bg-white/20 sm:w-auto"
               >
                 View Full Ledger
               </SmoothLink>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
-            <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl text-center shadow-lg">
-              <p className="text-slate-400 text-xs mb-1 font-medium uppercase tracking-wider">
+          <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:mb-12 lg:grid-cols-4 lg:gap-6">
+            <div className="rounded-3xl border border-white/10 bg-slate-900 p-5 text-center shadow-lg sm:p-6">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
                 Total Events
               </p>
               <p className="text-3xl font-black text-white">
@@ -461,8 +506,8 @@ export default function AdminDashboard() {
               </p>
             </div>
 
-            <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl text-center shadow-lg">
-              <p className="text-slate-400 text-xs mb-1 font-medium uppercase tracking-wider">
+            <div className="rounded-3xl border border-white/10 bg-slate-900 p-5 text-center shadow-lg sm:p-6">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
                 Confirmed
               </p>
               <p className="text-3xl font-black text-cyan-400">
@@ -470,126 +515,234 @@ export default function AdminDashboard() {
               </p>
             </div>
 
-            <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl text-center shadow-lg">
-              <p className="text-slate-400 text-xs mb-1 font-medium uppercase tracking-wider">
+            <div className="rounded-3xl border border-white/10 bg-slate-900 p-5 text-center shadow-lg sm:p-6">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
                 Pending Anchor
               </p>
-              <p className="text-3xl font-black text-warning">
+              <p className="text-3xl font-black text-yellow-400">
                 {auditStats.pending}
               </p>
             </div>
 
-            <div className="bg-slate-900 border border-white/10 p-6 rounded-3xl text-center shadow-lg">
-              <p className="text-slate-400 text-xs mb-1 font-medium uppercase tracking-wider">
+            <div className="rounded-3xl border border-white/10 bg-slate-900 p-5 text-center shadow-lg sm:p-6">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wider text-slate-400">
                 Coverage
               </p>
-              <p className="text-3xl font-black text-success">
+              <p className="text-3xl font-black text-green-400">
                 {auditStats.coverage}%
               </p>
             </div>
           </div>
 
-          <div className="bg-slate-900 overflow-hidden rounded-2xl border border-white/10 shadow-xl">
-            <table className="w-full text-left text-sm text-slate-300">
-              <thead className="bg-black/40 text-slate-400 text-xs uppercase font-semibold">
-                <tr>
-                  <th className="px-6 py-4">Dispute ID</th>
-                  <th className="px-6 py-4">Reason</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4 text-right">Actions</th>
-                </tr>
-              </thead>
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-900 shadow-xl">
+            <div className="border-b border-white/10 px-5 py-4 sm:px-6">
+              <h2 className="text-lg font-bold text-white">
+                Active Disputes
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Review, investigate, and resolve disputed review records.
+              </p>
+            </div>
 
-              <tbody className="divide-y divide-white/5">
-                {disputes.length === 0 ? (
+            <div className="hidden overflow-x-auto md:block">
+              <table className="w-full min-w-[760px] text-left text-sm text-slate-300">
+                <thead className="bg-black/40 text-xs font-semibold uppercase text-slate-400">
                   <tr>
-                    <td
-                      colSpan={4}
-                      className="px-6 py-12 text-center text-slate-500 italic"
-                    >
-                      No active disputes to review.
-                    </td>
+                    <th className="px-6 py-4">Dispute ID</th>
+                    <th className="px-6 py-4">Reason</th>
+                    <th className="px-6 py-4">Status</th>
+                    <th className="px-6 py-4 text-right">Actions</th>
                   </tr>
-                ) : (
-                  disputes.map((dispute, index) => (
-                    <tr
-                      key={
-                        dispute.id ||
-                        `${dispute.reviewId || "review"}-${index}`
-                      }
-                      className="hover:bg-white/[0.02] transition-colors"
-                    >
-                      <td className="px-6 py-4 font-mono text-xs text-slate-400">
-                        {dispute.id || "Missing ID"}
-                      </td>
+                </thead>
 
-                      <td className="px-6 py-4 text-white font-medium">
-                        {dispute.reason || "No reason provided"}
+                <tbody className="divide-y divide-white/5">
+                  {disputes.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={4}
+                        className="px-6 py-12 text-center italic text-slate-500"
+                      >
+                        No active disputes to review.
                       </td>
+                    </tr>
+                  ) : (
+                    disputes.map((dispute, index) => (
+                      <tr
+                        key={
+                          dispute.id ||
+                          `${dispute.reviewId || "review"}-${index}`
+                        }
+                        className="transition-colors hover:bg-white/[0.02]"
+                      >
+                        <td className="max-w-[220px] break-all px-6 py-4 font-mono text-xs text-slate-400">
+                          {dispute.id || "Missing ID"}
+                        </td>
 
-                      <td className="px-6 py-4">
-                        <span
-                          className={`px-3 py-1 rounded-full text-[10px] font-bold tracking-wider border ${
-                            dispute.status === "UNDER_REVIEW"
-                              ? "bg-purple-500/10 border-purple-500/20 text-purple-400"
-                              : "bg-warning/10 border-warning/20 text-warning"
-                          }`}
-                        >
-                          {dispute.status}
-                        </span>
-                      </td>
+                        <td className="max-w-[260px] break-words px-6 py-4 font-medium text-white">
+                          {dispute.reason || "No reason provided"}
+                        </td>
 
-                      <td className="px-6 py-4 text-right space-x-3">
+                        <td className="px-6 py-4">
+                          <span
+                            className={`rounded-full border px-3 py-1 text-[10px] font-bold tracking-wider ${
+                              dispute.status === "UNDER_REVIEW"
+                                ? "border-purple-500/20 bg-purple-500/10 text-purple-400"
+                                : "border-yellow-500/20 bg-yellow-500/10 text-yellow-400"
+                            }`}
+                          >
+                            {dispute.status}
+                          </span>
+                        </td>
+
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex justify-end gap-3">
+                            {dispute.status === "OPEN" && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleMarkUnderReview(
+                                    dispute.id,
+                                    dispute.reviewId
+                                  )
+                                }
+                                disabled={
+                                  actionLoading ||
+                                  !dispute.id ||
+                                  !dispute.reviewId
+                                }
+                                className="text-xs font-bold text-blue-400 transition-colors hover:text-blue-300 disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                Mark Under Review
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => setDecisionDispute(dispute)}
+                              disabled={
+                                actionLoading ||
+                                !dispute.id ||
+                                !dispute.reviewId
+                              }
+                              className="rounded border border-green-500/20 bg-green-500/10 px-3 py-1.5 text-xs font-bold text-green-400 transition-colors hover:text-green-300 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              Make Decision
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="grid gap-4 p-4 md:hidden">
+              {disputes.length === 0 ? (
+                <div className="rounded-2xl border border-white/5 bg-black/20 p-8 text-center italic text-slate-500">
+                  No active disputes to review.
+                </div>
+              ) : (
+                disputes.map((dispute, index) => (
+                  <div
+                    key={
+                      dispute.id || `${dispute.reviewId || "review"}-${index}`
+                    }
+                    className="rounded-2xl border border-white/5 bg-black/20 p-4"
+                  >
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <span
+                        className={`rounded-full border px-3 py-1 text-[10px] font-bold tracking-wider ${
+                          dispute.status === "UNDER_REVIEW"
+                            ? "border-purple-500/20 bg-purple-500/10 text-purple-400"
+                            : "border-yellow-500/20 bg-yellow-500/10 text-yellow-400"
+                        }`}
+                      >
+                        {dispute.status}
+                      </span>
+
+                      <span className="font-mono text-[10px] text-slate-500">
+                        #{index + 1}
+                      </span>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div>
+                        <p className="mb-1 text-[10px] uppercase tracking-widest text-slate-500">
+                          Dispute ID
+                        </p>
+                        <p className="break-all font-mono text-xs text-slate-300">
+                          {dispute.id || "Missing ID"}
+                        </p>
+                      </div>
+
+                      <div>
+                        <p className="mb-1 text-[10px] uppercase tracking-widest text-slate-500">
+                          Reason
+                        </p>
+                        <p className="break-words text-sm font-medium text-white">
+                          {dispute.reason || "No reason provided"}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col gap-2 pt-2">
                         {dispute.status === "OPEN" && (
                           <button
+                            type="button"
                             onClick={() =>
                               handleMarkUnderReview(
                                 dispute.id,
                                 dispute.reviewId
                               )
                             }
-                            disabled={!dispute.id || !dispute.reviewId}
-                            className="text-blue-400 hover:text-blue-300 text-xs font-bold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            disabled={
+                              actionLoading || !dispute.id || !dispute.reviewId
+                            }
+                            className="w-full rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-xs font-bold text-blue-400 transition hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             Mark Under Review
                           </button>
                         )}
 
                         <button
+                          type="button"
                           onClick={() => setDecisionDispute(dispute)}
-                          disabled={!dispute.id || !dispute.reviewId}
-                          className="text-success hover:text-green-400 text-xs font-bold transition-colors bg-success/10 px-3 py-1.5 rounded border border-success/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                          disabled={
+                            actionLoading || !dispute.id || !dispute.reviewId
+                          }
+                          className="w-full rounded-xl border border-green-500/20 bg-green-500/10 px-4 py-3 text-xs font-bold text-green-400 transition hover:bg-green-500/20 disabled:cursor-not-allowed disabled:opacity-40"
                         >
                           Make Decision
                         </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
           {decisionDispute && (
-            <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
+            <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-sm">
               <form
                 onSubmit={handleDecision}
-                className="bg-slate-900 p-8 rounded-3xl w-full max-w-lg border border-purple-500/30 shadow-2xl"
+                className="my-8 w-full max-w-lg rounded-3xl border border-purple-500/30 bg-slate-900 p-5 shadow-2xl sm:p-8"
               >
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-xl font-bold text-white">
+                <div className="mb-6 flex items-center justify-between gap-4">
+                  <h3 className="break-words text-xl font-bold text-white">
                     Admin Decision
                   </h3>
 
                   <button
                     type="button"
                     onClick={() => setDecisionDispute(null)}
+                    className="rounded-lg p-2 transition hover:bg-white/10"
                   >
                     <X className="text-slate-400 hover:text-white" />
                   </button>
                 </div>
 
-                <p className="text-xs text-blue-400 mb-4 font-mono bg-blue-900/20 p-2 rounded border border-blue-500/20">
+                <p className="mb-4 break-all rounded border border-blue-500/20 bg-blue-900/20 p-2 font-mono text-xs text-blue-400">
                   Target Dispute: {decisionDispute.id}
                 </p>
 
@@ -597,7 +750,7 @@ export default function AdminDashboard() {
                   value={decisionType}
                   onChange={(event) => setDecisionType(event.target.value)}
                   required
-                  className="w-full bg-black/50 border border-white/10 rounded-xl p-4 text-white outline-none focus:border-purple-500 mb-4 transition-colors"
+                  className="mb-4 w-full rounded-xl border border-white/10 bg-black/50 p-4 text-white outline-none transition-colors focus:border-purple-500"
                 >
                   <option value="">Select Action...</option>
                   <option value="MARK_RESOLVED">
@@ -621,14 +774,17 @@ export default function AdminDashboard() {
                   minLength={10}
                   placeholder="Required admin justification note..."
                   rows={4}
-                  className="w-full bg-black/50 border border-white/10 rounded-xl p-4 text-white outline-none focus:border-purple-500 mb-4 transition-colors"
+                  className="mb-4 w-full resize-y rounded-xl border border-white/10 bg-black/50 p-4 text-white outline-none transition-colors focus:border-purple-500"
                 />
 
                 <button
                   type="submit"
-                  className="w-full bg-purple-600 text-white font-bold py-3.5 rounded-xl hover:bg-purple-500 transition shadow-lg shadow-purple-500/20"
+                  disabled={actionLoading}
+                  className="w-full rounded-xl bg-purple-600 py-3.5 font-bold text-white shadow-lg shadow-purple-500/20 transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Execute Cryptographic Decision
+                  {actionLoading
+                    ? "Recording Decision..."
+                    : "Execute Cryptographic Decision"}
                 </button>
               </form>
             </div>

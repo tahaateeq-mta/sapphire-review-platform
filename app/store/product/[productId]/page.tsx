@@ -1,13 +1,26 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import {
+  ArrowLeft,
+  Hash,
+  Image as ImageIcon,
+  MessageSquare,
+  Package,
+  ShieldCheck,
+  ShoppingCart,
+  Star,
+  Tag,
+} from "lucide-react";
+
+import PageTransition from "@/components/animations/PageTransition";
+import SmoothLink from "@/components/animations/SmoothLink";
+import { getDemoState } from "@/lib/demoStore";
 import { getProduct } from "@/lib/firebase/services/productService";
 import { getReviewsForProduct } from "@/lib/firebase/services/reviewService";
 import { getRepliesForReviews } from "@/lib/firebase/services/merchantReplyService";
-import { Product, Review, ReviewStatus, MerchantReply } from "@/lib/types";
-import Link from "next/link";
-import { Tag, Package, Image as ImageIcon, Star, MessageSquare } from "lucide-react";
+import type { MerchantReply, Product, Review, ReviewStatus } from "@/lib/types";
 
 export default function ProductDetailPage() {
   const params = useParams();
@@ -18,294 +31,422 @@ export default function ProductDetailPage() {
   const [merchantReplies, setMerchantReplies] = useState<MerchantReply[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    async function load() {
-      const productId = params?.productId as string;
+  const isFirebase = process.env.NEXT_PUBLIC_DATA_MODE === "firebase";
+  const productId = typeof params?.productId === "string" ? params.productId : "";
 
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadProductDetail() {
       if (!productId) {
         setLoading(false);
         return;
       }
 
       try {
-        if (process.env.NEXT_PUBLIC_DATA_MODE === "firebase") {
-          const prod = await getProduct(productId);
-          setProduct(prod);
+        setLoading(true);
 
-          if (prod) {
-            const revs = await getReviewsForProduct(prod.id);
-            setReviews(revs);
+        if (isFirebase) {
+          const firestoreProduct = await getProduct(productId);
 
-            const reviewIds = revs.map((review) => review.id);
-            const replies = await getRepliesForReviews(reviewIds);
-            setMerchantReplies(replies);
+          if (!isMounted) return;
+
+          setProduct(firestoreProduct);
+
+          if (firestoreProduct) {
+            const firestoreReviews = await getReviewsForProduct(
+              firestoreProduct.id
+            );
+
+            if (!isMounted) return;
+
+            setReviews(firestoreReviews);
+
+            const reviewIds = firestoreReviews
+              .map((review) => review.id)
+              .filter(Boolean);
+
+            if (reviewIds.length > 0) {
+              const replies = await getRepliesForReviews(reviewIds);
+
+              if (!isMounted) return;
+
+              setMerchantReplies(replies);
+            } else {
+              setMerchantReplies([]);
+            }
+          } else {
+            setReviews([]);
+            setMerchantReplies([]);
           }
+
+          return;
         }
+
+        const demoState = getDemoState();
+        const demoProduct =
+          demoState.products.find((item) => item.id === productId) ?? null;
+
+        const demoReviews = demoState.reviews.filter(
+          (review) => review.productId === productId
+        );
+
+        if (!isMounted) return;
+
+        setProduct(demoProduct);
+        setReviews(demoReviews);
+        setMerchantReplies([]);
       } catch (error) {
         console.error("Error loading product detail data:", error);
+
+        if (!isMounted) return;
+
+        setProduct(null);
+        setReviews([]);
+        setMerchantReplies([]);
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     }
 
-    load();
-  }, [params?.productId]);
+    loadProductDetail();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isFirebase, productId]);
+
+  const hiddenStatuses: ReviewStatus[] = useMemo(
+    () => ["STRICKEN", "WITHDRAWN", "ARCHIVED"],
+    []
+  );
+
+  const visibleReviews = useMemo(() => {
+    return reviews.filter((review) => !hiddenStatuses.includes(review.status));
+  }, [hiddenStatuses, reviews]);
+
+  const avgRating = useMemo(() => {
+    if (visibleReviews.length === 0) return "0.0";
+
+    const totalRating = visibleReviews.reduce(
+      (sum, review) => sum + review.rating,
+      0
+    );
+
+    return (totalRating / visibleReviews.length).toFixed(1);
+  }, [visibleReviews]);
 
   if (loading) {
     return (
-      <div className="p-20 text-white text-center font-mono animate-pulse uppercase tracking-widest">
-        Accessing Ledger Record...
-      </div>
+      <PageTransition>
+        <div className="flex min-h-[50vh] items-center justify-center px-4 text-center">
+          <div className="rounded-3xl border border-white/10 bg-white/[0.03] px-6 py-10 shadow-2xl sm:px-10">
+            <p className="animate-pulse font-mono text-xs uppercase tracking-[0.3em] text-slate-400">
+              Accessing Ledger Record...
+            </p>
+          </div>
+        </div>
+      </PageTransition>
     );
   }
 
   if (!product) {
     return (
-      <div className="p-20 text-red-500 text-center font-bold">
-        CRITICAL ERROR: Product record not found in database.
-      </div>
-    );
-  }
+      <PageTransition>
+        <div className="mx-auto flex min-h-[50vh] max-w-xl items-center justify-center px-4 text-center">
+          <div className="rounded-3xl border border-red-500/20 bg-red-500/10 p-8 shadow-2xl sm:p-10">
+            <h1 className="mb-3 text-2xl font-black uppercase tracking-tight text-white">
+              Product Not Found
+            </h1>
 
-  if (product.status !== "ACTIVE") {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center p-8">
-        <div className="bg-slate-900 border border-white/10 p-10 rounded-3xl max-w-lg text-center shadow-2xl">
-          <h2 className="text-2xl font-black text-white mb-4 uppercase tracking-tight">
-            Product Unavailable
-          </h2>
+            <p className="mb-8 text-sm leading-6 text-red-200/80">
+              This product record could not be found in the current data source.
+            </p>
 
-          <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 rounded-xl text-sm font-medium">
-            This item is currently {product.status.toLowerCase()} and cannot be purchased.
+            <button
+              type="button"
+              onClick={() => router.push("/store")}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-800 px-5 py-3 text-sm font-bold text-white transition hover:bg-slate-700"
+            >
+              <ArrowLeft size={16} />
+              Back to Store
+            </button>
           </div>
-
-          <button
-            onClick={() => router.push("/store")}
-            className="mt-8 bg-slate-800 text-white px-6 py-2 rounded-lg hover:bg-slate-700 transition-all font-bold text-sm"
-          >
-            &larr; Back to Store
-          </button>
         </div>
-      </div>
+      </PageTransition>
     );
   }
 
   const imageSrc = product.imageUrl || product.image || "";
   const category = product.category || "Uncategorized";
   const stock = product.stock ?? 0;
+  const status = product.status || "ACTIVE";
+  const isAvailable = status === "ACTIVE" && stock > 0;
 
-  const hiddenStatuses: ReviewStatus[] = ["STRICKEN", "WITHDRAWN", "ARCHIVED"];
-  const visibleReviews = reviews.filter((review) => !hiddenStatuses.includes(review.status));
+  if (status !== "ACTIVE") {
+    return (
+      <PageTransition>
+        <div className="mx-auto flex min-h-[60vh] max-w-xl items-center justify-center px-4 text-center">
+          <div className="rounded-3xl border border-white/10 bg-slate-900 p-8 shadow-2xl sm:p-10">
+            <h1 className="mb-4 text-2xl font-black uppercase tracking-tight text-white">
+              Product Unavailable
+            </h1>
 
-  const avgRating =
-    visibleReviews.length > 0
-      ? (
-          visibleReviews.reduce((sum, review) => sum + review.rating, 0) /
-          visibleReviews.length
-        ).toFixed(1)
-      : "0.0";
+            <div className="rounded-xl border border-yellow-500/20 bg-yellow-500/10 p-4 text-sm font-medium leading-6 text-yellow-400">
+              This item is currently {status.toLowerCase()} and cannot be
+              purchased.
+            </div>
+
+            <button
+              type="button"
+              onClick={() => router.push("/store")}
+              className="mt-8 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-800 px-5 py-3 text-sm font-bold text-white transition hover:bg-slate-700"
+            >
+              <ArrowLeft size={16} />
+              Back to Store
+            </button>
+          </div>
+        </div>
+      </PageTransition>
+    );
+  }
 
   return (
-    <div className="p-8 text-white max-w-6xl mx-auto">
-      <div className="flex flex-col md:flex-row gap-12 mb-16 bg-slate-900 p-10 rounded-3xl border border-white/5 shadow-2xl items-center">
-        <div className="w-full md:w-2/5 bg-[#0a1220] rounded-2xl aspect-square flex items-center justify-center border border-white/5 overflow-hidden shrink-0 relative shadow-inner">
-          {imageSrc ? (
-            <img src={imageSrc} alt={product.name} className="w-full h-full object-cover" />
+    <PageTransition>
+      <div className="mx-auto w-full max-w-6xl overflow-x-hidden text-white">
+        <button
+          type="button"
+          onClick={() => router.push("/store")}
+          className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:bg-white/10 hover:text-white"
+        >
+          <ArrowLeft size={16} />
+          Back to Store
+        </button>
+
+        <section className="mb-12 grid grid-cols-1 gap-8 rounded-3xl border border-white/5 bg-slate-900 p-5 shadow-2xl sm:p-6 lg:mb-16 lg:grid-cols-[0.9fr_1.1fr] lg:gap-12 lg:p-10">
+          <div className="relative flex aspect-square w-full min-w-0 items-center justify-center overflow-hidden rounded-2xl border border-white/5 bg-[#0a1220] shadow-inner">
+            {imageSrc ? (
+              <img
+                src={imageSrc}
+                alt={product.name}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <ImageIcon size={64} className="text-slate-700 opacity-40" />
+            )}
+
+            <div className="absolute left-4 top-4 inline-flex items-center gap-1 rounded-lg bg-blue-600 px-2 py-1 text-[10px] font-black uppercase tracking-tighter text-white shadow-lg">
+              <ShieldCheck size={12} />
+              Verified Item
+            </div>
+          </div>
+
+          <div className="flex min-w-0 flex-col justify-center">
+            <h1 className="mb-3 break-words text-3xl font-black uppercase tracking-tight text-white sm:text-4xl lg:text-5xl">
+              {product.name}
+            </h1>
+
+            <div className="mb-6 text-2xl font-black text-blue-400 sm:text-3xl">
+              ${(product.price || 0).toFixed(2)}
+            </div>
+
+            <div className="mb-8 flex flex-wrap items-center gap-3 text-xs font-bold uppercase tracking-widest text-slate-500">
+              <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/5 bg-white/5 px-3 py-2">
+                <Tag size={14} className="shrink-0 text-blue-500" />
+                <span className="truncate">{category}</span>
+              </div>
+
+              <div className="flex min-w-0 items-center gap-2 rounded-lg border border-white/5 bg-white/5 px-3 py-2">
+                <Package
+                  size={14}
+                  className={stock > 0 ? "shrink-0 text-green-500" : "shrink-0 text-red-500"}
+                />
+                <span className={stock > 0 ? "truncate text-slate-300" : "truncate text-red-500"}>
+                  {stock > 0 ? `${stock} units available` : "Sold Out"}
+                </span>
+              </div>
+            </div>
+
+            <p className="mb-8 break-words text-base font-light leading-7 text-slate-400 sm:text-lg">
+              {product.description || "No detailed specifications available."}
+            </p>
+
+            <div className="mb-8 flex w-full flex-col gap-4 rounded-2xl border border-white/5 bg-black/40 p-5 shadow-lg sm:w-fit sm:flex-row sm:items-center sm:gap-6">
+              <div className="flex items-center gap-2 text-3xl font-black text-yellow-500 sm:text-4xl">
+                <Star size={28} fill="currentColor" />
+                {avgRating}
+              </div>
+
+              <div className="space-y-1 border-t border-white/10 pt-4 text-[10px] font-black uppercase tracking-widest text-slate-500 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+                <div>
+                  <span className="text-lg text-white">{reviews.length}</span>{" "}
+                  Total Logs
+                </div>
+
+                <div className="text-green-500">
+                  <span className="text-green-400">
+                    {visibleReviews.length}
+                  </span>{" "}
+                  Public Proofs
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => router.push(`/checkout/${product.id}`)}
+              disabled={!isAvailable}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-8 py-5 text-sm font-black uppercase tracking-widest text-white shadow-xl shadow-blue-900/20 transition-all hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-600 sm:w-fit sm:px-12"
+            >
+              <ShoppingCart size={18} />
+              {stock > 0 ? "Secure Purchase" : "Inventory Depleted"}
+            </button>
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+            <h2 className="text-xl font-black uppercase tracking-tight text-white sm:text-2xl">
+              Verified Proof-of-Purchase Ledger
+            </h2>
+            <div className="hidden h-px flex-grow bg-white/10 sm:block" />
+          </div>
+
+          {reviews.length === 0 ? (
+            <div className="rounded-3xl border-2 border-dashed border-white/5 bg-white/[0.01] p-8 text-center text-sm italic leading-6 text-slate-600 sm:p-12 lg:p-16">
+              No cryptographic evidence found for this product. Be the first to
+              generate an entry.
+            </div>
           ) : (
-            <ImageIcon size={64} className="text-slate-700 opacity-30" />
-          )}
+            <div className="grid grid-cols-1 gap-6">
+              {reviews.map((review) => {
+                const isHidden = hiddenStatuses.includes(review.status);
+                const merchantReply = merchantReplies.find(
+                  (reply) => reply.reviewId === review.id
+                );
 
-          <div className="absolute top-4 left-4 bg-blue-600 text-[10px] font-black px-2 py-1 rounded uppercase tracking-tighter shadow-lg">
-            Verified Item
-          </div>
-        </div>
+                return (
+                  <article
+                    key={review.id}
+                    className={`glass-panel min-w-0 rounded-3xl border p-5 shadow-xl transition-all sm:p-6 lg:p-8 ${
+                      isHidden
+                        ? "border-red-500/20 bg-red-500/[0.02] opacity-70"
+                        : "border-white/5 hover:border-blue-500/30"
+                    }`}
+                  >
+                    <div className="mb-6 flex flex-col justify-between gap-4 md:flex-row md:items-start">
+                      <div className="min-w-0">
+                        <div className="mb-3 flex flex-wrap items-center gap-3">
+                          <div className="flex shrink-0 gap-0.5 text-yellow-500">
+                            {[...Array(5)].map((_, index) => (
+                              <Star
+                                key={index}
+                                size={14}
+                                fill={
+                                  index < review.rating
+                                    ? "currentColor"
+                                    : "none"
+                                }
+                                className={
+                                  index < review.rating ? "" : "text-slate-700"
+                                }
+                              />
+                            ))}
+                          </div>
 
-        <div className="w-full md:w-3/5">
-          <h1 className="text-5xl font-black mb-2 tracking-tighter uppercase">
-            {product.name}
-          </h1>
+                          <span className="rounded border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-[10px] font-black uppercase tracking-tighter text-green-400">
+                            ✓ Verified Transaction
+                          </span>
 
-          <div className="text-3xl text-blue-400 font-black mb-6">
-            ${(product.price || 0).toFixed(2)}
-          </div>
+                          <span
+                            className={`rounded border px-2 py-0.5 text-[10px] font-black uppercase tracking-tighter ${
+                              isHidden
+                                ? "border-red-500/20 bg-red-500/10 text-red-400"
+                                : "border-white/5 bg-slate-800 text-slate-400"
+                            }`}
+                          >
+                            {review.status}
+                          </span>
+                        </div>
 
-          <div className="flex items-center gap-6 text-xs font-bold uppercase tracking-widest text-slate-500 mb-8">
-            <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-lg border border-white/5">
-              <Tag size={14} className="text-blue-500" />
-              <span>{category}</span>
-            </div>
-
-            <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-lg border border-white/5">
-              <Package size={14} className={stock > 0 ? "text-green-500" : "text-red-500"} />
-              <span className={stock > 0 ? "text-slate-300" : "text-red-500"}>
-                {stock > 0 ? `${stock} units available` : "Sold Out"}
-              </span>
-            </div>
-          </div>
-
-          <p className="text-slate-400 mb-8 leading-relaxed font-light text-lg">
-            {product.description || "No detailed specifications available."}
-          </p>
-
-          <div className="flex gap-6 items-center p-5 bg-black/40 rounded-2xl border border-white/5 w-max mb-10 shadow-lg">
-            <div className="text-4xl font-black text-yellow-500 flex items-center gap-1">
-              <Star size={28} fill="currentColor" />
-              {avgRating}
-            </div>
-
-            <div className="text-[10px] uppercase font-black tracking-widest text-slate-500 border-l border-white/10 pl-6 space-y-1">
-              <div>
-                <span className="text-white text-lg">{reviews.length}</span> Total Logs
-              </div>
-
-              <div className="text-green-500">
-                <span className="text-green-400">{visibleReviews.length}</span> Public Proofs
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={() => router.push(`/checkout/${product.id}`)}
-            disabled={stock <= 0}
-            className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 disabled:cursor-not-allowed text-white font-black py-5 px-12 rounded-2xl w-full md:w-max transition-all shadow-xl shadow-blue-900/20 uppercase tracking-widest text-sm"
-          >
-            {stock > 0 ? "Secure Purchase" : "Inventory Depleted"}
-          </button>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-4 mb-8">
-        <h2 className="text-2xl font-black uppercase tracking-tight">
-          Verified Proof-of-Purchase Ledger
-        </h2>
-        <div className="h-px bg-white/10 flex-grow" />
-      </div>
-
-      <div className="grid grid-cols-1 gap-6">
-        {reviews.length === 0 ? (
-          <div className="text-slate-600 italic p-16 text-center border-2 border-dashed border-white/5 rounded-3xl bg-white/[0.01]">
-            No cryptographic evidence found for this product. Be the first to generate an entry.
-          </div>
-        ) : (
-          reviews.map((review) => {
-            const isHidden = hiddenStatuses.includes(review.status);
-            const merchantReply = merchantReplies.find(
-              (reply) => reply.reviewId === review.id
-            );
-
-            return (
-              <div
-                key={review.id}
-                className={`glass-panel border rounded-3xl p-8 transition-all shadow-xl ${
-                  isHidden
-                    ? "border-red-500/20 bg-red-500/[0.02] opacity-60"
-                    : "border-white/5 hover:border-blue-500/30"
-                }`}
-              >
-                <div className="flex flex-col md:flex-row justify-between items-start gap-4 mb-6">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-3 mb-3">
-                      <div className="flex text-yellow-500 gap-0.5">
-                        {[...Array(5)].map((_, index) => (
-                          <Star
-                            key={index}
-                            size={14}
-                            fill={index < review.rating ? "currentColor" : "none"}
-                            className={index < review.rating ? "" : "text-slate-700"}
-                          />
-                        ))}
+                        <h3 className="break-words text-lg font-black uppercase tracking-tight text-white sm:text-xl">
+                          {isHidden
+                            ? "Log Stricken from Public View"
+                            : review.title}
+                        </h3>
                       </div>
 
-                      <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter bg-green-500/10 text-green-400 border border-green-500/20">
-                        ✓ Verified Transaction
-                      </span>
-
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-tighter border ${
-                          isHidden
-                            ? "bg-red-500/10 text-red-400 border-red-500/20"
-                            : "bg-slate-800 text-slate-400 border-white/5"
-                        }`}
-                      >
-                        {review.status}
-                      </span>
-                    </div>
-
-                    <h3 className="font-black text-xl uppercase tracking-tight">
-                      {isHidden ? "Log Stricken from Public View" : review.title}
-                    </h3>
-                  </div>
-
-                  <div className="text-left md:text-right font-mono">
-                    <p className="text-[10px] text-slate-500 mb-1">
-                      Actor: {review.userId.substring(0, 12)}...
-                    </p>
-
-                    <p className="text-[10px] text-cyan-400 bg-cyan-900/20 px-3 py-1 rounded-full border border-cyan-500/10">
-                      SIG: {review.contentHash?.substring(0, 24)}...
-                    </p>
-                  </div>
-                </div>
-
-                <p
-                  className={`text-base leading-relaxed ${
-                    isHidden
-                      ? "text-red-400/70 italic"
-                      : "text-slate-400 font-light"
-                  } mb-8`}
-                >
-                  {isHidden
-                    ? `This record was ${review.status.toLowerCase()} by the customer or platform governance. Hash-chain data persists for audit.`
-                    : review.content}
-                </p>
-
-                {merchantReply && (
-                  <div className="mb-8 rounded-2xl border border-blue-500/20 bg-blue-500/10 p-5">
-                    <div className="flex items-center gap-2 mb-3">
-                      <MessageSquare size={16} className="text-blue-300" />
-                      <p className="text-xs font-black uppercase tracking-widest text-blue-300">
-                        Merchant Response
-                      </p>
-                    </div>
-
-                    <p className="text-slate-200 text-sm leading-relaxed">
-                      {merchantReply.content}
-                    </p>
-
-                    <div className="mt-4 flex flex-col gap-1 text-[10px] text-slate-500">
-                      {merchantReply.contentHash && (
-                        <p className="font-mono truncate">
-                          Response Hash: {merchantReply.contentHash}
+                      <div className="min-w-0 rounded-2xl border border-white/5 bg-black/20 p-3 font-mono md:max-w-[280px] md:text-right">
+                        <p className="mb-2 break-all text-[10px] text-slate-500">
+                          Actor: {review.userId?.substring(0, 12) || "unknown"}
+                          ...
                         </p>
-                      )}
 
-                      <p>
-                        Responded:{" "}
-                        {merchantReply.createdAt
-                          ? new Date(merchantReply.createdAt).toLocaleString()
-                          : "Unknown date"}
-                      </p>
+                        <p className="break-all rounded-full border border-cyan-500/10 bg-cyan-900/20 px-3 py-1 text-[10px] text-cyan-400">
+                          SIG: {review.contentHash?.substring(0, 24) || "pending"}
+                          ...
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                )}
 
-                <div className="pt-6 border-t border-white/5 flex justify-between items-center">
-                  <Link
-                    href={`/review/${review.id}/timeline`}
-                    className="text-[10px] font-black text-slate-500 hover:text-blue-400 transition-colors flex items-center gap-2 uppercase tracking-widest"
-                  >
-                    <span>Analyze Audit Chain &rarr;</span>
-                  </Link>
+                    <p
+                      className={`mb-6 break-words text-sm leading-7 sm:text-base ${
+                        isHidden
+                          ? "text-red-400/70 italic"
+                          : "font-light text-slate-400"
+                      }`}
+                    >
+                      {isHidden
+                        ? `This record was ${review.status.toLowerCase()} by the customer or platform governance. Hash-chain data persists for audit.`
+                        : review.content}
+                    </p>
 
-                  <span className="text-[10px] text-slate-700 font-mono">
-                    {new Date(review.createdAt).toLocaleDateString()}
-                  </span>
-                </div>
-              </div>
-            );
-          })
-        )}
+                    <div className="mb-6 flex flex-wrap items-center gap-3 text-[10px] font-mono uppercase tracking-widest text-slate-500">
+                      <div className="inline-flex min-w-0 items-center gap-2 rounded-lg border border-white/5 bg-white/[0.03] px-3 py-2">
+                        <Hash size={12} className="shrink-0 text-blue-400" />
+                        <span className="break-all">
+                          {review.contentHash || "Hash pending"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {merchantReply && (
+                      <div className="mb-6 rounded-2xl border border-blue-500/20 bg-blue-500/10 p-4">
+                        <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase tracking-widest text-blue-300">
+                          <MessageSquare size={14} />
+                          Merchant Reply
+                        </div>
+
+                        <p className="break-words text-sm leading-6 text-slate-300">
+                          {merchantReply.content}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="flex flex-col gap-3 border-t border-white/10 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-xs text-slate-500">
+                        Review ID:{" "}
+                        <span className="font-mono break-all text-slate-400">
+                          {review.id}
+                        </span>
+                      </p>
+
+                      <SmoothLink
+                        href={`/review/${review.id}/timeline`}
+                        className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-center text-xs font-bold uppercase tracking-widest text-white transition hover:bg-white/10"
+                      >
+                        View Timeline
+                      </SmoothLink>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </div>
-    </div>
+    </PageTransition>
   );
 }

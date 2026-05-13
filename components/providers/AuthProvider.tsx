@@ -1,11 +1,18 @@
 "use client";
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { firebaseAuth, isFirebaseConfigured } from '@/lib/firebase/client';
-import { getUserProfile, logoutFirebase } from '@/lib/firebase/authService';
-// Import the repaired types from lib/types.ts[cite: 1]
-import { UserProfile, Role } from '@/lib/types';
-import { setCurrentUser, clearCurrentUser } from '@/lib/demoStore';
+
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { onAuthStateChanged, type User as FirebaseUser } from "firebase/auth";
+import { firebaseAuth, isFirebaseConfigured } from "@/lib/firebase/client";
+import { getUserProfile, logoutFirebase } from "@/lib/firebase/authService";
+import type { Role, UserProfile } from "@/lib/types";
+import { clearCurrentUser, setCurrentUser } from "@/lib/demoStore";
 
 interface AuthContextType {
   currentUser: FirebaseUser | null;
@@ -19,85 +26,116 @@ interface AuthContextType {
   refreshProfile: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({} as AuthContextType);
+const AuthContext = createContext<AuthContextType>({
+  currentUser: null,
+  userProfile: null,
+  role: null,
+  loading: true,
+  isCustomer: false,
+  isMerchant: false,
+  isAdmin: false,
+  signOutUser: async () => {},
+  refreshProfile: async () => {},
+});
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [currentUser, setCurrentUserFb] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  /**
-   * Synchronizes the Firestore UserProfile with the Auth context.
-   */
-  const fetchProfile = async (uid: string) => {
+  const fetchProfile = useCallback(async (uid: string) => {
     try {
       const profile = await getUserProfile(uid);
+
       setUserProfile(profile);
-      
-      // Update demoStore for hybrid mock/live consistency
+
       if (profile) {
-        // Casting is no longer needed as UserProfile now matches in both files[cite: 1]
-        setCurrentUser(profile.uid, profile); 
+        setCurrentUser(profile.uid, profile);
+      } else {
+        clearCurrentUser();
       }
     } catch (error) {
       console.error("Auth Error: Could not retrieve profile from ledger.", error);
+      setUserProfile(null);
+      clearCurrentUser();
     }
-  };
+  }, []);
 
   useEffect(() => {
-    // Safety check for Next.js build time and environment configuration
     if (!isFirebaseConfigured) {
+      setCurrentUserFb(null);
+      setUserProfile(null);
+      clearCurrentUser();
       setLoading(false);
       return;
     }
 
     const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
-      setCurrentUserFb(user);
-      if (user) {
-        await fetchProfile(user.uid);
-      } else {
+      setLoading(true);
+
+      try {
+        setCurrentUserFb(user);
+
+        if (user) {
+          await fetchProfile(user.uid);
+        } else {
+          setUserProfile(null);
+          clearCurrentUser();
+        }
+      } catch (error) {
+        console.error("Auth state sync failed:", error);
+        setCurrentUserFb(null);
         setUserProfile(null);
         clearCurrentUser();
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [fetchProfile]);
 
-  const signOutUser = async () => {
+  const signOutUser = useCallback(async () => {
     try {
+      setLoading(true);
+
       await logoutFirebase();
+
+      setCurrentUserFb(null);
+      setUserProfile(null);
+      clearCurrentUser();
     } catch (error) {
       console.error("Sign out failed:", error);
+      throw error;
+    } finally {
+      setLoading(false);
     }
-  };
+  }, []);
 
-  const refreshProfile = async () => {
-    if (currentUser) {
-      await fetchProfile(currentUser.uid);
-    }
-  };
+  const refreshProfile = useCallback(async () => {
+    if (!currentUser?.uid) return;
 
-  // Derive role based on the repaired UserProfile schema
+    await fetchProfile(currentUser.uid);
+  }, [currentUser?.uid, fetchProfile]);
+
   const role = userProfile?.role || null;
 
-  return (
-    <AuthContext.Provider value={{
+  const value = useMemo<AuthContextType>(
+    () => ({
       currentUser,
       userProfile,
       role,
       loading,
-      isCustomer: role === 'CUSTOMER',
-      isMerchant: role === 'MERCHANT',
-      isAdmin: role === 'ADMIN',
+      isCustomer: role === "CUSTOMER",
+      isMerchant: role === "MERCHANT",
+      isAdmin: role === "ADMIN",
       signOutUser,
-      refreshProfile
-    }}>
-      {children}
-    </AuthContext.Provider>
+      refreshProfile,
+    }),
+    [currentUser, userProfile, role, loading, signOutUser, refreshProfile]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-// Hook for accessing the verified auth context throughout the app[cite: 13]
 export const useAuth = () => useContext(AuthContext);

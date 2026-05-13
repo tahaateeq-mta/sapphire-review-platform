@@ -1,45 +1,111 @@
-import PageTransition from '@/components/animations/PageTransition';
-import SmoothLink from '@/components/animations/SmoothLink';
+"use client";
+
+import PageTransition from "@/components/animations/PageTransition";
+import SmoothLink from "@/components/animations/SmoothLink";
+import { useAuth } from "@/components/providers/AuthProvider";
+import { getDashboardRouteForRole } from "@/lib/auth/redirectByRole";
 
 export default function Home() {
+  const { userProfile, loading } = useAuth();
+
+  const dashboardHref = userProfile?.role
+    ? getDashboardRouteForRole(userProfile.role)
+    : "/login";
+
+  const dashboardLabel =
+    userProfile?.role === "ADMIN"
+      ? "Admin Dashboard"
+      : userProfile?.role === "MERCHANT"
+        ? "Merchant Portal"
+        : userProfile?.role === "CUSTOMER"
+          ? "My Orders"
+          : "Login";
+
   return (
     <PageTransition>
-      <div className="flex flex-col items-center justify-center text-center overflow-hidden w-full">
-        <div className="animate-fade-in-up glass-panel px-4 py-1.5 rounded-full mb-8 flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-          <span className="text-xs font-semibold tracking-widest text-slate-400 uppercase">Phase 7 FYP Prototype</span>
-        </div>
-
-        <h1 className="animate-fade-in-up delay-100 text-6xl md:text-8xl font-black mb-6 tracking-tighter text-white">
-          Trust, but <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300">Verify.</span>
+      <div className="mx-auto flex w-full max-w-7xl flex-col items-center overflow-x-hidden text-center">
+        <h1 className="animate-fade-in-up delay-100 mb-5 max-w-5xl text-5xl font-black tracking-tighter text-white sm:text-6xl md:text-7xl lg:text-8xl">
+          Trust, but{" "}
+          <span className="bg-gradient-to-r from-blue-400 to-cyan-300 bg-clip-text text-transparent">
+            Verify.
+          </span>
         </h1>
-        
-        <p className="animate-fade-in-up delay-200 text-xl md:text-2xl text-slate-400 mb-12 font-light max-w-3xl leading-relaxed tracking-tight">
-          Sapphire is a tamper-resistant review integrity prototype. It combines verified purchase eligibility, off-chain review storage, hash-linked lifecycle events, and blockchain audit anchoring.
+
+        <p className="animate-fade-in-up delay-200 mb-10 max-w-3xl text-base font-light leading-7 tracking-tight text-slate-400 sm:text-lg md:text-xl lg:text-2xl">
+          Sapphire is a tamper-resistant review integrity platform. It combines
+          verified purchase eligibility, off-chain review storage, hash-linked
+          lifecycle events, and blockchain audit anchoring.
         </p>
-        
-        <div className="animate-fade-in-up delay-300 flex flex-wrap justify-center gap-4 mb-16 w-full">
-          <SmoothLink href="/store" className="bg-white text-black px-8 py-4 rounded-full font-semibold hover:bg-slate-200 transition-colors shadow-[0_0_20px_rgba(255,255,255,0.15)]">Start Demo Store</SmoothLink>
-          <SmoothLink href="/demo-flow" className="bg-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:bg-blue-500 transition-colors shadow-[0_0_15px_rgba(37,99,235,0.4)]">View Walkthrough</SmoothLink>
-          <SmoothLink href="/architecture" className="bg-slate-800/80 text-white border border-white/10 px-8 py-4 rounded-full font-medium hover:bg-slate-700 transition-colors">Architecture</SmoothLink>
+
+        <div className="animate-fade-in-up delay-300 mb-12 flex w-full max-w-3xl flex-col justify-center gap-3 sm:flex-row sm:flex-wrap sm:gap-4 lg:mb-16">
+          <SmoothLink
+            href="/store"
+            className="w-full rounded-full bg-white px-6 py-4 text-center font-semibold text-black shadow-[0_0_20px_rgba(255,255,255,0.15)] transition-colors hover:bg-slate-200 sm:w-auto sm:px-8"
+          >
+            Start Demo Store
+          </SmoothLink>
+
+          {loading ? (
+            <div className="w-full rounded-full bg-blue-600/60 px-6 py-4 text-center font-semibold text-white shadow-[0_0_15px_rgba(37,99,235,0.25)] sm:w-auto sm:px-8">
+              Loading...
+            </div>
+          ) : (
+            <SmoothLink
+              href={dashboardHref}
+              className="w-full rounded-full bg-blue-600 px-6 py-4 text-center font-semibold text-white shadow-[0_0_15px_rgba(37,99,235,0.4)] transition-colors hover:bg-blue-500 sm:w-auto sm:px-8"
+            >
+              {dashboardLabel}
+            </SmoothLink>
+          )}
+
+          <SmoothLink
+            href="/demo-flow"
+            className="w-full rounded-full border border-white/10 bg-slate-800/80 px-6 py-4 text-center font-medium text-white transition-colors hover:bg-slate-700 sm:w-auto sm:px-8"
+          >
+            View Walkthrough
+          </SmoothLink>
+
+          <SmoothLink
+            href="/architecture"
+            className="w-full rounded-full border border-white/10 bg-slate-800/80 px-6 py-4 text-center font-medium text-white transition-colors hover:bg-slate-700 sm:w-auto sm:px-8"
+          >
+            Architecture
+          </SmoothLink>
         </div>
 
-        <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-500 text-sm p-4 rounded-xl max-w-3xl mx-auto mb-20 animate-fade-in-up delay-300">
-          <strong>Note for Assessors:</strong> This prototype runs entirely in the browser using <code>localStorage</code>, Mock IPFS, and Mock Polygon Amoy Blockchain anchoring to allow for seamless demonstration without real web3 wallets.
-        </div>
+        <div className="mx-auto mb-16 grid w-full max-w-6xl grid-cols-1 gap-5 text-left sm:gap-6 md:grid-cols-3 lg:gap-8">
+          <div className="glass-panel min-w-0 rounded-3xl p-6 sm:p-8">
+            <h3 className="mb-4 text-lg font-bold text-white sm:text-xl">
+              1. Verified Experience
+            </h3>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-6xl mx-auto text-left mb-16">
-          <div className="glass-panel p-8 rounded-3xl">
-             <h3 className="text-xl font-bold text-white mb-4">1. Verified Experience</h3>
-             <p className="text-slate-400 font-light leading-relaxed text-sm">Customers cannot leave reviews without a cryptographically consumed Proof-of-Purchase (PoP) token generated upon delivery.</p>
+            <p className="text-sm font-light leading-relaxed text-slate-400">
+              Customers cannot leave reviews without a cryptographically
+              consumed Proof-of-Purchase token generated upon delivery.
+            </p>
           </div>
-          <div className="glass-panel p-8 rounded-3xl">
-             <h3 className="text-xl font-bold text-white mb-4">2. Tamper-Evident Ledger</h3>
-             <p className="text-slate-400 font-light leading-relaxed text-sm">Sapphire doesn't force reviews to be permanently negative. It allows dispute resolution, but forces every edit, reply, or admin strike onto a public timeline.</p>
+
+          <div className="glass-panel min-w-0 rounded-3xl p-6 sm:p-8">
+            <h3 className="mb-4 text-lg font-bold text-white sm:text-xl">
+              2. Tamper-Evident Ledger
+            </h3>
+
+            <p className="text-sm font-light leading-relaxed text-slate-400">
+              Sapphire does not force reviews to be permanently negative. It
+              allows dispute resolution, but forces every edit, reply, or admin
+              strike onto a public timeline.
+            </p>
           </div>
-          <div className="glass-panel p-8 rounded-3xl">
-             <h3 className="text-xl font-bold text-white mb-4">3. Blockchain Anchoring</h3>
-             <p className="text-slate-400 font-light leading-relaxed text-sm">Heavy review text is stored off-chain (IPFS). Only lightweight cryptographic proofs are anchored to the Polygon Amoy testnet.</p>
+
+          <div className="glass-panel min-w-0 rounded-3xl p-6 sm:p-8">
+            <h3 className="mb-4 text-lg font-bold text-white sm:text-xl">
+              3. Blockchain Anchoring
+            </h3>
+
+            <p className="text-sm font-light leading-relaxed text-slate-400">
+              Heavy review text is stored off-chain using IPFS. Only lightweight
+              cryptographic proofs are anchored to the Polygon Amoy testnet.
+            </p>
           </div>
         </div>
       </div>

@@ -1,20 +1,30 @@
 "use client";
+
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import React, { ReactNode } from "react";
+import type { LinkProps } from "next/link";
+import type { AnchorHTMLAttributes, ReactNode } from "react";
 
-export default function SmoothLink({ href, children, className }: { href: string; children: ReactNode; className?: string; }) {
-  const router = useRouter();
-
-  const handleTransition = (e: React.MouseEvent<HTMLAnchorElement>) => {
-    e.preventDefault();
-    document.body.style.opacity = '0';
-    document.body.style.transition = 'opacity 0.3s ease';
-    setTimeout(() => {
-      router.push(href);
-      setTimeout(() => { document.body.style.opacity = '1'; }, 50);
-    }, 300);
+type SmoothLinkProps = LinkProps &
+  Omit<AnchorHTMLAttributes<HTMLAnchorElement>, keyof LinkProps> & {
+    children: ReactNode;
+    className?: string;
   };
 
-  return <Link href={href} onClick={handleTransition} className={className}>{children}</Link>;
+export default function SmoothLink({
+  href,
+  children,
+  className,
+  onClick,
+  ...props
+}: SmoothLinkProps) {
+  return (
+    <Link
+      href={href}
+      className={className}
+      onClick={onClick}
+      {...props}
+    >
+      {children}
+    </Link>
+  );
 }
