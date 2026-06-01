@@ -37,8 +37,40 @@ function getShortValue(value?: string | null, length = 16) {
   return `${value.substring(0, length)}...`;
 }
 
+function isAlreadyExistsStatus(status?: string | null) {
+  return status === "ALREADY_EXISTS";
+}
+
 function isAnchoredStatus(status?: string | null) {
-  return status === "MOCK_CONFIRMED" || status === "CONFIRMED";
+  return (
+    status === "MOCK_CONFIRMED" ||
+    status === "CONFIRMED" ||
+    status === "ALREADY_EXISTS"
+  );
+}
+
+function getTxHashLabel(event: AuditEvent) {
+  if (event.blockchainTxHash || event.transactionHash) {
+    return getShortValue(event.blockchainTxHash || event.transactionHash, 22);
+  }
+
+  if (isAlreadyExistsStatus(String(event.blockchainStatus))) {
+    return "Already on-chain";
+  }
+
+  return "Pending...";
+}
+
+function getFullTxHashLabel(event: AuditEvent) {
+  if (event.blockchainTxHash || event.transactionHash) {
+    return event.blockchainTxHash || event.transactionHash;
+  }
+
+  if (isAlreadyExistsStatus(String(event.blockchainStatus))) {
+    return "Already on-chain, original transaction hash unavailable";
+  }
+
+  return "Pending...";
 }
 
 export default function AdminAuditLog() {
@@ -114,7 +146,7 @@ export default function AdminAuditLog() {
       if (isFirebaseMode) {
         await anchorAllPendingFirestoreAuditEvents();
         await loadData();
-        alert("Events anchored successfully.");
+        alert("Events processed successfully.");
         return;
       }
 
@@ -337,24 +369,12 @@ export default function AdminAuditLog() {
                               target="_blank"
                               rel="noreferrer"
                               className="transition hover:text-blue-400 hover:underline"
-                              title={
-                                event.blockchainTxHash ||
-                                event.transactionHash ||
-                                "Pending..."
-                              }
+                              title={getFullTxHashLabel(event)}
                             >
-                              {getShortValue(
-                                event.blockchainTxHash ||
-                                  event.transactionHash,
-                                22
-                              )}
+                              {getTxHashLabel(event)}
                             </a>
                           ) : (
-                            getShortValue(
-                              event.blockchainTxHash ||
-                                event.transactionHash,
-                              22
-                            )
+                            getTxHashLabel(event)
                           )}
                         </td>
 
@@ -373,6 +393,12 @@ export default function AdminAuditLog() {
                               <Link size={14} />
                               View
                             </a>
+                          ) : isAlreadyExistsStatus(
+                              String(event.blockchainStatus)
+                            ) ? (
+                            <span className="text-xs italic text-blue-400">
+                              Already on-chain
+                            </span>
                           ) : (
                             <span className="text-xs italic text-slate-600">
                               Unavailable
@@ -433,9 +459,7 @@ export default function AdminAuditLog() {
                         </p>
 
                         <p className="break-all rounded-xl bg-black/30 p-3 font-mono text-slate-400">
-                          {event.blockchainTxHash ||
-                            event.transactionHash ||
-                            "Pending..."}
+                          {getFullTxHashLabel(event)}
                         </p>
                       </div>
 
@@ -460,6 +484,15 @@ export default function AdminAuditLog() {
                           View Explorer
                         </a>
                       )}
+
+                      {!event.explorerUrl &&
+                        isAlreadyExistsStatus(
+                          String(event.blockchainStatus)
+                        ) && (
+                          <p className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3 text-center text-xs font-bold uppercase tracking-widest text-blue-400">
+                            Already on-chain, explorer transaction unavailable
+                          </p>
+                        )}
                     </div>
                   </article>
                 ))
