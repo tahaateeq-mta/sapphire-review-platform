@@ -276,7 +276,7 @@ export default function AdminAuditLog() {
             </div>
 
             <div className="hidden overflow-x-auto lg:block">
-              <table className="w-full min-w-[960px] text-left text-sm text-slate-300">
+              <table className="w-full min-w-[1080px] text-left text-sm text-slate-300">
                 <thead className="bg-black/40 text-xs font-bold uppercase text-slate-400">
                   <tr>
                     <th className="px-6 py-5">Event / Time</th>
@@ -284,6 +284,7 @@ export default function AdminAuditLog() {
                     <th className="px-6 py-5">Status</th>
                     <th className="px-6 py-5">Tx Hash</th>
                     <th className="px-6 py-5">Event Hash</th>
+                    <th className="px-6 py-5">Explorer</th>
                   </tr>
                 </thead>
 
@@ -291,7 +292,7 @@ export default function AdminAuditLog() {
                   {events.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={5}
+                        colSpan={6}
                         className="px-6 py-12 text-center italic text-slate-500"
                       >
                         No audit events found.
@@ -330,14 +331,53 @@ export default function AdminAuditLog() {
                         </td>
 
                         <td className="max-w-[180px] break-all px-6 py-4 font-mono text-xs text-slate-400">
-                          {getShortValue(
-                            event.blockchainTxHash || event.transactionHash,
-                            22
+                          {event.explorerUrl ? (
+                            <a
+                              href={event.explorerUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="transition hover:text-blue-400 hover:underline"
+                              title={
+                                event.blockchainTxHash ||
+                                event.transactionHash ||
+                                "Pending..."
+                              }
+                            >
+                              {getShortValue(
+                                event.blockchainTxHash ||
+                                  event.transactionHash,
+                                22
+                              )}
+                            </a>
+                          ) : (
+                            getShortValue(
+                              event.blockchainTxHash ||
+                                event.transactionHash,
+                              22
+                            )
                           )}
                         </td>
 
                         <td className="max-w-[180px] break-all px-6 py-4 font-mono text-xs text-slate-500">
                           {getShortValue(event.eventHash, 22)}
+                        </td>
+
+                        <td className="px-6 py-4">
+                          {event.explorerUrl ? (
+                            <a
+                              href={event.explorerUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-2 text-xs font-bold uppercase tracking-wider text-blue-400 transition hover:bg-blue-500/20 hover:text-white"
+                            >
+                              <Link size={14} />
+                              View
+                            </a>
+                          ) : (
+                            <span className="text-xs italic text-slate-600">
+                              Unavailable
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))
